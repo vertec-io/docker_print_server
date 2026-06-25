@@ -2,11 +2,11 @@
 # Docker Print Server - Docker Compose Configuration
 # =============================================================================
 #
-# Services:
-#   - CUPS:              Print server (http://localhost:631)
-#   - Samba:             Windows SMB printer sharing (\\server\printers)
+# Services (all in one container):
+#   - CUPS:              Print server (http://<host>:631)
+#   - Samba:             Windows SMB printer sharing (\\<host>\printers)
 #   - wsdd:              Windows network discovery (WSD protocol)
-#   - DirectPrintClient: Odoo integration (http://localhost:8888)
+#   - DirectPrintClient: Odoo integration (http://<host>:8888)
 #
 # Usage:
 #   docker compose up -d --build    # Build and start
@@ -15,14 +15,28 @@
 #   docker compose restart          # Restart services
 #
 # Configuration:
-#   Copy .env.example to .env and modify settings as needed
+#   Copy .env.example to .env and modify settings as needed.
 #
+# NETWORKING (host mode):
+#   This deploys with host networking (`network_mode: host`), which is the
+#   correct mode for a Linux print-server VM and is REQUIRED for:
+#     - Windows WSD / mDNS (Bonjour) auto-discovery so end users can find the
+#       server and printers on the LAN (3702/udp, 5357, multicast).
+#     - CUPS seeing REAL client IPs (its web-interface session/CSRF auth and
+#       its access-control rules behave correctly with real clients; behind a
+#       Docker bridge every client looks like the bridge gateway).
+#   The container binds these host ports directly: 631 (CUPS), 8888 (DirectPrint),
+#   139/445 (Samba), 3702-udp/5357 (wsdd), 9100 (raw). Make sure the host firewall
+#   allows them and nothing else on the host is already bound to them.
+#
+#   On Windows/macOS hosts (development only) host networking is not supported the
+#   same way: remove `network_mode: host` and use the commented bridge + published
+#   ports block at the bottom of this file instead.
+#
+#   SELinux hosts (RHEL/AlmaLinux/Rocky): before first start, relabel the bind
+#   mounts so the container can read them:
+#     chcon -Rt container_file_t ./config ./data
 # =============================================================================
-
-networks:
-  printnet:
-    name: printnet
-    driver: bridge
 
 services:
   print-server:
@@ -38,6 +52,10 @@ services:
     container_name: print-server
     hostname: print-server
     restart: unless-stopped
+
+    # Host networking (Linux). See the NETWORKING note in the header.
+    # For Windows/macOS dev, remove this line and use the bridge block below.
+    network_mode: host
 
     environment:
       - CUPS_WEBINTERFACE=yes
@@ -65,31 +83,6 @@ services:
       # Print queue spool
       - ./data/spool:/var/spool/cups
 
-    ports:
-      # DirectPrintClient web interface (Odoo integration)
-      - "8888:8888"
-
-      # CUPS web interface and IPP
-      - "631:631"
-
-      # Samba NetBIOS Session
-      # Note: On Windows hosts, use alternate ports (1139/1445) since Windows uses 139/445
-      # On Linux/macOS hosts or production VMs, use standard ports (139/445)
-      - "${SMB_NETBIOS_PORT:-1139}:139"
-
-      # Samba SMB Direct (Windows file/printer sharing)
-      - "${SMB_PORT:-1445}:445"
-
-      # wsdd WS-Discovery (Windows network discovery)
-      - "3702:3702/udp"
-      - "5357:5357"
-
-      # Raw printing (JetDirect/AppSocket) - optional
-      - "9100:9100"
-
-    networks:
-      - printnet
-
     logging:
       driver: json-file
       options:
@@ -104,3 +97,28 @@ services:
     # privileged: true
     # devices:
     #   - /dev/bus/usb:/dev/bus/usb
+
+# =============================================================================
+# Windows / macOS (development) alternative: bridge networking + published ports
+# -----------------------------------------------------------------------------
+# Host networking is Linux-only. On Windows/macOS, REMOVE `network_mode: host`
+# above and uncomment everything below (the top-level `networks:` block and add
+# the `ports:` + `networks:` keys back under the service).
+#
+# networks:
+#   printnet:
+#     name: printnet
+#     driver: bridge
+#
+#   # ...and under `print-server:` add:
+#     ports:
+#       - "8888:8888"                       # DirectPrintClient (Odoo)
+#       - "631:631"                         # CUPS
+#       - "${SMB_NETBIOS_PORT:-1139}:139"   # Samba NetBIOS (use 139 on Linux)
+#       - "${SMB_PORT:-1445}:445"           # Samba SMB     (use 445 on Linux)
+#       - "3702:3702/udp"                   # wsdd WS-Discovery
+#       - "5357:5357"                       # wsdd HTTP
+#       - "9100:9100"                       # Raw / JetDirect
+#     networks:
+#       - printnet
+# =============================================================================

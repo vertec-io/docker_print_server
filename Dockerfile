@@ -10,10 +10,17 @@
 # - DirectPrintClient for Odoo Direct Print integration
 #
 # Host OS can be any Docker-compatible system (Linux, Windows, macOS)
-# The container runs Ubuntu 22.04 LTS internally (supported until April 2027).
+# The container runs Debian 12 (bookworm) internally.
 #
+# !! DO NOT switch this back to ubuntu:22.04 !!
+# Ubuntu 22.04's patched CUPS (2.4.1op1) has a web-interface session-cookie
+# auth regression: once a browser sends back CUPS's own `org.cups.sid` cookie,
+# authentication fails ("pam_authenticate() returned 7") even with the correct
+# password -- producing an endless admin-login loop. curl/CLI work (they don't
+# send the cookie), so it's easy to misdiagnose as a password problem.
+# Debian's clean CUPS 2.4.2 does not have this bug. (Diagnosed & verified 2026-06-25.)
 # =============================================================================
-FROM ubuntu:22.04
+FROM debian:12-slim
 
 # =============================================================================
 # Build Arguments (can be overridden at build time or via .env)

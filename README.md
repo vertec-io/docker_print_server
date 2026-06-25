@@ -8,7 +8,9 @@ A containerized print server solution for industrial environments that integrate
 
 This solution allows you to deploy a print server on a local VM and connect various printers (label printers, regular printers, etc.) to Odoo via Ventor Tech's Direct Print module.
 
-> **Note**: The host VM can be any OS that supports Docker (Linux, Windows, macOS). The container runs Debian 11 internally, ensuring consistent behavior across different host platforms.
+> **Note**: The host VM can be any OS that supports Docker (Linux, Windows, macOS). The container runs **Debian 12 (bookworm)** internally, ensuring consistent behavior across different host platforms.
+>
+> **Do not switch the base image to Ubuntu.** Ubuntu 22.04's patched CUPS (`2.4.1op1`) has a web-interface auth regression that breaks the admin login (see [Troubleshooting → Admin login loops](#admin-login-keeps-looping-401)). Debian's CUPS is clean.
 
 ---
 
@@ -33,7 +35,7 @@ This solution allows you to deploy a print server on a local VM and connect vari
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         Docker Container (Debian 11)                      │
+│                         Docker Container (Debian 12)                      │
 │                                                                           │
 │  ┌─────────────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
 │  │ DirectPrint     │  │   CUPS   │  │   wsdd   │  │      Samba        │  │
@@ -506,8 +508,36 @@ cat /var/log/syslog | grep DirectPrint
 | Printer shows "paused" | Run `cupsenable PrinterName` inside container |
 | Windows can't see Samba share | Check firewall, verify SMB ports 139/445 open |
 | "Access Denied" on Windows | Verify using correct credentials (`printuser` / your SAMBA_PASSWORD) |
-| Windows can't find server in Network | Check ports 3702/udp and 5357 are open for wsdd |
+| Windows can't find server in Network | Check ports 3702/udp and 5357 are open for wsdd; ensure host networking (see compose) |
 | DirectPrintClient won't connect to Odoo | Verify network connectivity to Odoo server |
+| **Admin login loops / rejects correct password** | **Almost always the base image — see below. Must be Debian, not Ubuntu.** |
+
+### Admin login keeps looping (401)
+
+**Symptom:** The CUPS web admin (`http://<host>:631/admin`) shows the login box, you enter
+the correct `root` / CUPS password, and it just re-opens the box — forever. `curl`/CLI with the
+same credentials work fine, which makes it look like a password or browser problem. It is neither.
+
+**Cause:** Ubuntu 22.04's patched CUPS (`2.4.1op1`) has a web-interface session-cookie auth
+regression. Browsers send CUPS's own `org.cups.sid` cookie back on every request; with that
+cookie present, CUPS's auth fails (`pam_authenticate() returned 7` in `/var/log/cups/error_log`)
+even though the password is correct. `curl` works only because it doesn't send the cookie back.
+
+**Fix:** This image is built on **Debian 12** (CUPS 2.4.2), which does not have the bug. If you
+ever see this again, confirm the base image:
+
+```bash
+docker compose exec print-server cat /etc/os-release   # must say Debian, not Ubuntu
+```
+
+Quick way to reproduce/confirm the bug from any client (no browser needed):
+
+```bash
+# Save CUPS's cookie, then send it back — both must return 200 on a healthy build:
+curl -s -o /dev/null -w '%{http_code}\n' -c /tmp/c -u root:PASSWORD http://HOST:631/admin
+curl -s -o /dev/null -w '%{http_code}\n' -b /tmp/c -u root:PASSWORD http://HOST:631/admin
+# Broken (Ubuntu) build returns 200 then 401. Healthy (Debian) build returns 200 then 200.
+```
 
 ---
 
